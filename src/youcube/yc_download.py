@@ -7,8 +7,10 @@ Download Functionality of YC
 
 # Built-in modules
 from asyncio import run_coroutine_threadsafe
-from os import getenv, listdir
-from os.path import abspath, dirname, join
+import hashlib
+from os import getenv, listdir, makedirs
+from os.path import abspath, dirname, exists, join
+from shutil import copy2
 from tempfile import TemporaryDirectory
 
 # Local modules
@@ -58,6 +60,41 @@ def download_video(
     """
     Converts the downloaded video to 32vid
     """
+    input_files = listdir(temp_dir)
+    if not input_files:
+        logger.warning("No downloaded video file found in temp_dir.")
+        run_coroutine_threadsafe(
+            resp.send(dumps({"action": "error", "message": "Faild to convert video!"})),
+            loop,
+        )
+        return
+
+    input_file = join(temp_dir, input_files[0])
+    target_filepath = join(DATA_FOLDER, get_video_name(media_id, width, height))
+
+    # Compute input hash
+    hasher = hashlib.sha256()
+    with open(input_file, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            hasher.update(chunk)
+    input_hash = hasher.hexdigest()
+
+    cache_dir = join(DATA_FOLDER, "sanjuuni_cache")
+    makedirs(cache_dir, exist_ok=True)
+    cache_filename = f"{input_hash}_{width}x{height}_{'no_opencl' if DISABLE_OPENCL else 'opencl'}.32vid"
+    cache_filepath = join(cache_dir, cache_filename)
+
+    if exists(cache_filepath):
+        logger.info("Using cached Sanjuuni result for input %s", input_hash)
+        run_coroutine_threadsafe(
+            resp.send(
+                dumps({"action": "status", "message": "Using cached video conversion ..."})
+            ),
+            loop,
+        )
+        copy2(cache_filepath, target_filepath)
+        return
+
     run_coroutine_threadsafe(
         resp.send(
             dumps({"action": "status", "message": "Converting video to 32vid ..."})
@@ -82,16 +119,20 @@ def download_video(
             "--width=" + str(width),
             "--height=" + str(height),
             "-i",
-            join(temp_dir, listdir(temp_dir)[0]),
+            input_file,
             "--raw",
             "-o",
-            join(DATA_FOLDER, get_video_name(media_id, width, height)),
+            target_filepath,
             "--disable-opencl" if DISABLE_OPENCL else "",
         ],
         handler,
     )
 
-    if returncode != 0:
+    if returncode == 0:
+        if exists(target_filepath):
+            copy2(target_filepath, cache_filepath)
+            logger.info("Cached Sanjuuni result to %s", cache_filename)
+    else:
         logger.warning("Sanjuuni exited with %s", returncode)
         run_coroutine_threadsafe(
             resp.send(dumps({"action": "error", "message": "Faild to convert video!"})),
