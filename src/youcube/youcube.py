@@ -779,79 +779,17 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
         display_width = int(request.args.get("display_width", "0"))
         display_height = int(request.args.get("display_height", "0"))
         
-        offsets = await get_line_offsets(file)
-        start_frame = segment_index * HLS_VIDEO_FRAMES_PER_SEGMENT
-        if start_frame < 0 or start_frame >= len(offsets):
+        frame_table = await create_hls_video_frame_table(
+            file,
+            segment_index,
+            is_directgpu,
+            display_width,
+            display_height,
+        )
+        if frame_table is None:
             return text("", status=404)
-            
-        offset = offsets[start_frame]
-        frames_data = []
-        async with await open_async(file=file, mode="rb") as f:
-            await f.seek(offset)
-            for _ in range(HLS_VIDEO_FRAMES_PER_SEGMENT):
-                line = await f.readline()
-                if not line:
-                    break
-                if line.endswith(b"\r\n"):
-                    line = line[:-2]
-                elif line.endswith(b"\n"):
-                    line = line[:-1]
-                
-                if is_directgpu:
-                    draws, palette = decode_32vid_frame_directgpu(line, display_width, display_height)
-                    draws_bin = encode_draws_binary(draws)
-                    frames_data.append({
-                        "is_directgpu": True,
-                        "palette": palette,
-                        "draws": draws_bin
-                    })
-                else:
-                    text_lines, fg_lines, bg_lines, palette = decode_32vid_frame(line)
-                    frames_data.append({
-                        "is_directgpu": False,
-                        "palette": palette,
-                        "text": text_lines,
-                        "fg": fg_lines,
-                        "bg": bg_lines
-                    })
-                    
-        # Generate Lua segment script
-        out = ["return {\\n"]
-        for frame in frames_data:
-            out.append("  {\\n")
-            
-            # Palette
-            out.append("    palette = {\\n")
-            for r, g, b in frame["palette"]:
-                out.append(f"      {{{r/255.0:.4f}, {g/255.0:.4f}, {b/255.0:.4f}}},\\n")
-            out.append("    },\\n")
-            
-            if frame["is_directgpu"]:
-                esc_draws = "".join(f"\\\\{val}" for val in frame["draws"])
-                out.append(f'    draws = "{esc_draws}",\\n')
-            else:
-                out.append("    text = {\\n")
-                for t in frame["text"]:
-                    t_esc = t.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r')
-                    out.append(f'      "{t_esc}",\\n')
-                out.append("    },\\n")
-                
-                out.append("    fg = {\\n")
-                for fg in frame["fg"]:
-                    fg_esc = fg.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r')
-                    out.append(f'      "{fg_esc}",\\n')
-                out.append("    },\\n")
-                
-                out.append("    bg = {\\n")
-                for bg in frame["bg"]:
-                    bg_esc = bg.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r')
-                    out.append(f'      "{bg_esc}",\\n')
-                out.append("    },\\n")
-                
-            out.append("  },\\n")
-        out.append("}\\n")
-        
-        return text("".join(out), content_type="text/plain")
+
+        return text(frame_table, content_type="text/plain")
         
     except Exception as e:
         logger.error("HLS Video error: %s", e)
