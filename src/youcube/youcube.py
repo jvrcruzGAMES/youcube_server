@@ -11,7 +11,7 @@ from base64 import b64encode
 from datetime import datetime
 from multiprocessing import Manager
 from os import getenv, remove
-from os.path import exists, join
+from os.path import exists, join, getsize
 from shutil import which
 from time import sleep
 from typing import Any, List, Tuple, Type, Union
@@ -37,7 +37,7 @@ from sanic.compat import open_async
 from sanic.exceptions import SanicException
 from sanic.handlers import ErrorHandler
 from sanic.response import file as file_response
-from sanic.response import raw, text
+from sanic.response import raw, text, json as json_response
 from spotipy import MemoryCacheHandler, SpotifyClientCredentials
 from spotipy.client import Spotify
 
@@ -440,6 +440,143 @@ async def stream_32vid(
             await get_vid(join(DATA_FOLDER, get_video_name(media_id, width, height)), tracker)
         )
     )
+
+
+line_offsets_cache = {}
+
+async def get_line_offsets(file_path: str) -> List[int]:
+    if file_path in line_offsets_cache:
+        return line_offsets_cache[file_path]
+    
+    offsets = []
+    async with await open_async(file_path, mode="rb") as f:
+        offset = 0
+        while True:
+            offsets.append(offset)
+            line = await f.readline()
+            if not line:
+                offsets.pop() # Remove the offset of EOF
+                break
+            offset += len(line)
+            
+    line_offsets_cache[file_path] = offsets
+    return offsets
+
+
+@app.route("/hls/request")
+async def hls_request(request: Request):
+    import math
+    url = request.args.get("url")
+    width_str = request.args.get("width")
+    height_str = request.args.get("height")
+    hq_audio = request.args.get("hq_audio") == "true"
+
+    if not url:
+        return json_response({"error": "Missing url parameter"}, status=400)
+    
+    try:
+        width = int(width_str) if width_str else 656
+        height = int(height_str) if height_str else 324
+    except ValueError:
+        return json_response({"error": "Invalid width or height"}, status=400)
+
+    width, height = cap_width_and_height(width, height)
+
+    loop = get_running_loop()
+    
+    class DummyWS:
+        async def send(self, *args, **kwargs):
+            pass
+    
+    dummy_ws = DummyWS()
+    
+    out, files = await run_function_in_thread_from_async_function(
+        download,
+        url,
+        dummy_ws,
+        loop,
+        width,
+        height,
+        hq_audio,
+        spotify_url_processor,
+    )
+    
+    for file in files:
+        request.app.shared_ctx.data[file] = datetime.now()
+        
+    if out.get("action") == "error":
+        return json_response(out, status=500)
+        
+    video_file_name = get_video_name(out["id"], width, height)
+    video_file = join(DATA_FOLDER, video_file_name)
+    
+    try:
+        offsets = await get_line_offsets(video_file)
+        video_segments_count = len(offsets)
+    except Exception:
+        video_segments_count = 0
+
+    audio_file_name = get_audio_name(out["id"])
+    audio_file = join(DATA_FOLDER, audio_file_name)
+    try:
+        audio_size = getsize(audio_file)
+        audio_segments_count = math.ceil(audio_size / CHUNKS_AT_ONCE)
+    except Exception:
+        audio_segments_count = 0
+
+    out["video_segments_count"] = video_segments_count
+    out["audio_segments_count"] = audio_segments_count
+    return json_response(out)
+
+
+@app.route("/hls/audio/<media_id:str>/<segment_index:int>")
+async def hls_audio(request: Request, media_id: str, segment_index: int):
+    channel = request.args.get("channel", "mono")
+    
+    if channel == "left":
+        file_name = get_audio_name(f"{media_id}_left")
+    elif channel == "right":
+        file_name = get_audio_name(f"{media_id}_right")
+    else:
+        file_name = get_audio_name(media_id)
+        
+    file = join(DATA_FOLDER, file_name)
+    
+    if not is_save(media_id) or not exists(file):
+        return text("", status=404)
+        
+    async with await open_async(file=file, mode="rb") as f:
+        await f.seek(segment_index * CHUNKS_AT_ONCE)
+        chunk = await f.read(CHUNKS_AT_ONCE)
+        return raw(chunk, content_type="application/octet-stream")
+
+
+@app.route("/hls/video/<media_id:str>/<width:int>x<height:int>/<segment_index:int>")
+async def hls_video(request: Request, media_id: str, width: int, height: int, segment_index: int):
+    width, height = cap_width_and_height(width, height)
+    file_name = get_video_name(media_id, width, height)
+    file = join(DATA_FOLDER, file_name)
+    
+    if not is_save(media_id) or not exists(file):
+        return text("", status=404)
+        
+    try:
+        offsets = await get_line_offsets(file)
+        if segment_index < 0 or segment_index >= len(offsets):
+            return text("", status=404)
+            
+        offset = offsets[segment_index]
+        async with await open_async(file=file, mode="rb") as f:
+            await f.seek(offset)
+            line = await f.readline()
+            if line.endswith(b"\r\n"):
+                line = line[:-2]
+            elif line.endswith(b"\n"):
+                line = line[:-1]
+            return text(line.decode("utf-8", errors="ignore"))
+    except Exception as e:
+        logger.error("HLS Video error: %s", e)
+        return text("", status=500)
 
 
 """"
