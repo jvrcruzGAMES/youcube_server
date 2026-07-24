@@ -722,9 +722,6 @@ def main() -> None:
     app.run(host=host, port=port, fast=fast, access_log=True)
 
 
-if __name__ == "__main__":
-    main()
-
 def decode_teletext_py(char_code: int):
     if char_code < 128 or char_code > 255:
         return [0, 0, 0, 0, 0, 0]
@@ -892,3 +889,7 @@ def encode_draws_binary(draws: list) -> bytes:
     for x, y, w, h, r, g, b in draws:
         out.append(struct.pack(">HHHHBBB", x, y, w, h, r, g, b))
     return b"".join(out)
+
+
+if __name__ == "__main__":
+    main()
