@@ -528,6 +528,10 @@ async def hls_request(request: Request):
     except Exception:
         audio_segments_count = 0
 
+    if hq_audio and out.get("action") == "media":
+        out["audio_format"] = "mp3"
+        out["audio_url"] = f"{external_base_url(request)}/mp3/{out.get('id')}"
+
     out["video_segments_count"] = video_segments_count
     out["audio_segments_count"] = audio_segments_count
     return json_response(out)
