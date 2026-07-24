@@ -9,6 +9,7 @@ YouCube Server
 from asyncio import get_running_loop
 from base64 import b64encode
 from datetime import datetime
+import math
 from multiprocessing import Manager
 from os import getenv, remove
 from os.path import exists, join, getsize
@@ -233,19 +234,59 @@ class Actions:
         if error := assert_resp("url", url, str):
             return error
         # TODO: assert_resp width and height
-        out, files = await run_function_in_thread_from_async_function(
-            download,
-            url,
-            resp,
-            loop,
-            message.get("width"),
-            message.get("height"),
-            bool(message.get("hq_audio")),
-            spotify_url_processor,
-        )
+        width = message.get("width")
+        height = message.get("height")
+        if width and height:
+            width, height = cap_width_and_height(width, height)
+
+        hq_audio = bool(message.get("hq_audio"))
+
+        async def download_media():
+            return await run_function_in_thread_from_async_function(
+                download,
+                url,
+                resp,
+                loop,
+                width,
+                height,
+                hq_audio,
+                spotify_url_processor,
+            )
+
+        out, files = await download_media()
         if message.get("hq_audio") and out.get("action") == "media":
             out["audio_format"] = "mp3"
             out["audio_url"] = f"{external_base_url(request)}/mp3/{out.get('id')}"
+        if width and height and out.get("action") == "media":
+            video_file_name = get_video_name(out["id"], width, height)
+            video_file = join(DATA_FOLDER, video_file_name)
+            if not exists(video_file):
+                await resp.send(
+                    dumps(
+                        {
+                            "action": "status",
+                            "message": "Video frame source missing, converting ...",
+                        }
+                    )
+                )
+                out, files = await download_media()
+                if out.get("action") != "media":
+                    return out
+
+                video_file_name = get_video_name(out["id"], width, height)
+                video_file = join(DATA_FOLDER, video_file_name)
+                if not exists(video_file):
+                    return {
+                        "action": "error",
+                        "message": "Failed to convert video to sanjuuni frame source",
+                    }
+
+            offsets = await get_line_offsets(video_file)
+            out["video_width"] = width
+            out["video_height"] = height
+            out["video_segments_count"] = math.ceil(
+                len(offsets) / HLS_VIDEO_FRAMES_PER_SEGMENT
+            )
         for file in files:
             request.app.shared_ctx.data[file] = datetime.now()
         return out
@@ -568,7 +609,10 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
     file = join(DATA_FOLDER, file_name)
     
     if not is_save(media_id) or not exists(file):
-        return text("", status=404)
+        return text(
+            "Sanjuuni frame source is missing. Request media first to start conversion.",
+            status=404,
+        )
         
     try:
         is_directgpu = request.args.get("is_directgpu") == "true"
