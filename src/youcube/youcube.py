@@ -594,39 +594,29 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
         return text("", status=500)
 
 
-""""
-from sanic import response
 @app.route("/dfpwm/<id:str>")
-async def stream_dfpwm(request: Request, id: str):
+async def stream_dfpwm_file(request: Request, id: str):
     file_name = get_audio_name(id)
-    file = join(DATA_FOLDER, get_audio_name(id))
-    return await response.file_stream(
+    file = join(DATA_FOLDER, file_name)
+    if not is_save(id) or not exists(file):
+        return text("Not found", status=404)
+    return await file_response(
         file,
-        chunk_size=CHUNKS_AT_ONCE,
-        mime_type="application/metalink4+xml",
-        headers={
-            "Content-Disposition": f'Attachment; filename="{file_name}"',
-            "Content-Type": "application/metalink4+xml",
-        },
+        mime_type="application/octet-stream",
     )
 
-@app.route("/32vid/<id:str>/<width:int>/<height:int>", stream=True)
-async def stream_32vid(request: Request, id: str, width: int, height: int):
+
+@app.route("/32vid/<id:str>/<width:int>/<height:int>")
+async def stream_32vid_file(request: Request, id: str, width: int, height: int):
+    width, height = cap_width_and_height(width, height, max_width=1920, max_height=1080)
     file_name = get_video_name(id, width, height)
-    file = join(
-        DATA_FOLDER,
-        file_name
-    )
-    return await response.file_stream(
+    file = join(DATA_FOLDER, file_name)
+    if not is_save(id) or not exists(file):
+        return text("Not found", status=404)
+    return await file_response(
         file,
-        chunk_size=10,
-        mime_type="application/metalink4+xml",
-        headers={
-            "Content-Disposition": f'Attachment; filename="{file_name}"',
-            "Content-Type": "application/metalink4+xml",
-        },
+        mime_type="text/plain",
     )
-"""
 # pylint: enable=redefined-outer-name
 
 
