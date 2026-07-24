@@ -142,7 +142,7 @@ def download_video(
 
 def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
     """
-    Converts the downloaded audio to dfpwm
+    Converts the downloaded audio to mono, left, and right dfpwm files
     """
     run_coroutine_threadsafe(
         resp.send(
@@ -160,11 +160,14 @@ def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
         logger.debug("%s%s", prefix, line)
         # TODO: send message to resp
 
+    input_file = join(temp_dir, listdir(temp_dir)[0])
+
+    # Convert to mono
     returncode = run_with_live_output(
         [
             FFMPEG_PATH,
             "-i",
-            join(temp_dir, listdir(temp_dir)[0]),
+            input_file,
             "-f",
             "dfpwm",
             "-ar",
@@ -177,10 +180,52 @@ def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
     )
 
     if returncode != 0:
-        logger.warning("FFmpeg exited with %s", returncode)
+        logger.warning("FFmpeg exited with %s during mono conversion", returncode)
         run_coroutine_threadsafe(
             resp.send(dumps({"action": "error", "message": "Faild to convert audio!"})),
             loop,
+        )
+        return
+
+    # Convert to left channel
+    returncode_l = run_with_live_output(
+        [
+            FFMPEG_PATH,
+            "-i",
+            input_file,
+            "-f",
+            "dfpwm",
+            "-ar",
+            "48000",
+            "-af",
+            "pan=mono|c0=FL",
+            join(DATA_FOLDER, get_audio_name(f"{media_id}_left")),
+        ],
+        handler,
+    )
+
+    # Convert to right channel
+    returncode_r = run_with_live_output(
+        [
+            FFMPEG_PATH,
+            "-i",
+            input_file,
+            "-f",
+            "dfpwm",
+            "-ar",
+            "48000",
+            "-af",
+            "pan=mono|c0=FR",
+            join(DATA_FOLDER, get_audio_name(f"{media_id}_right")),
+        ],
+        handler,
+    )
+
+    if returncode_l != 0 or returncode_r != 0:
+        logger.warning(
+            "FFmpeg exited with error code(s) for stereo channel conversion: L=%s, R=%s",
+            returncode_l,
+            returncode_r,
         )
 
 
@@ -381,6 +426,8 @@ def download(
 
     files = []
     files.append(get_audio_name(media_id))
+    files.append(get_audio_name(f"{media_id}_left"))
+    files.append(get_audio_name(f"{media_id}_right"))
     if hq_audio:
         files.append(get_hq_audio_name(media_id))
     if is_video:

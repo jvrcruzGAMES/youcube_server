@@ -147,13 +147,20 @@ def external_base_url(request: Request) -> str:
     return f"{scheme}://{host}"
 
 
-async def get_vid(vid_file: str, tracker: int) -> List[str]:
+async def get_vid(vid_file: str, tracker: int, frames_count: int = FRAMES_AT_ONCE) -> List[str]:
     """Returns given line of 32vid file"""
-    async with await open_async(file=vid_file, mode="r", encoding="utf-8") as file:
+    async with await open_async(file=vid_file, mode="rb") as file:
         await file.seek(tracker)
         lines = []
-        for _unused in range(FRAMES_AT_ONCE):
-            lines.append((await file.readline())[:-1])  # remove \n
+        for _unused in range(frames_count):
+            line = await file.readline()
+            if not line:
+                break
+            if line.endswith(b"\r\n"):
+                line = line[:-2]
+            elif line.endswith(b"\n"):
+                line = line[:-1]
+            lines.append(line.decode("utf-8", errors="ignore"))
 
     return lines
 
@@ -296,7 +303,12 @@ class Actions:
 
             request.app.shared_ctx.data[file_name] = datetime.now()
 
-            return {"action": "vid", "lines": await get_vid(file, tracker)}
+            # Dynamic FRAMES_AT_ONCE calculation to keep message size under ~50KB
+            char_width, char_height = width // 2, height // 3
+            frame_size = char_width * char_height * 1.35
+            frames_to_read = max(1, min(FRAMES_AT_ONCE, int(50000 // max(1.0, frame_size))))
+
+            return {"action": "vid", "lines": await get_vid(file, tracker, frames_to_read)}
 
         return {"action": "error", "message": "You dare not use special Characters"}
 

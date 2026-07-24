@@ -104,7 +104,11 @@ def create_data_folder_if_not_present():
 
 def is_audio_already_downloaded(media_id: str) -> bool:
     """Returns True if the given audio is already downloaded"""
-    return exists(get_audio_path(media_id))
+    return (
+        exists(get_audio_path(media_id))
+        and exists(get_audio_path(f"{media_id}_left"))
+        and exists(get_audio_path(f"{media_id}_right"))
+    )
 
 
 def is_hq_audio_already_downloaded(media_id: str) -> bool:
