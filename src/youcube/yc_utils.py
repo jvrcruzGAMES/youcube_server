@@ -62,6 +62,7 @@ def cap_width_and_height(width: int, height: int) -> Tuple[int, int]:
 
 VIDEO_FORMAT = "32vid"
 AUDIO_FORMAT = "dfpwm"
+HQ_AUDIO_FORMAT = "mp3"
 DATA_FOLDER = join(dirname(abspath(__file__)), "data")
 
 
@@ -75,6 +76,11 @@ def get_audio_name(media_id: str) -> str:
     return f"{media_id}.{AUDIO_FORMAT}"
 
 
+def get_hq_audio_name(media_id: str) -> str:
+    """Returns the file name of the high-quality audio file"""
+    return f"{media_id}.{HQ_AUDIO_FORMAT}"
+
+
 def get_video_path(media_id: str, width: int, height: int) -> str:
     """Returns the relative path to the requested video"""
     return join(DATA_FOLDER, get_video_name(media_id, width, height))
@@ -83,6 +89,11 @@ def get_video_path(media_id: str, width: int, height: int) -> str:
 def get_audio_path(media_id: str) -> str:
     """Returns the relative path to the requested audio"""
     return join(DATA_FOLDER, get_audio_name(media_id))
+
+
+def get_hq_audio_path(media_id: str) -> str:
+    """Returns the relative path to the high-quality audio file"""
+    return join(DATA_FOLDER, get_hq_audio_name(media_id))
 
 
 def create_data_folder_if_not_present():
@@ -94,6 +105,11 @@ def create_data_folder_if_not_present():
 def is_audio_already_downloaded(media_id: str) -> bool:
     """Returns True if the given audio is already downloaded"""
     return exists(get_audio_path(media_id))
+
+
+def is_hq_audio_already_downloaded(media_id: str) -> bool:
+    """Returns True if the given high-quality audio is already downloaded"""
+    return exists(get_hq_audio_path(media_id))
 
 
 def is_video_already_downloaded(media_id: str, width: int, height: int) -> bool:

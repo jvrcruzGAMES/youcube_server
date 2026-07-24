@@ -36,6 +36,7 @@ from sanic import Request, Sanic, Websocket
 from sanic.compat import open_async
 from sanic.exceptions import SanicException
 from sanic.handlers import ErrorHandler
+from sanic.response import file as file_response
 from sanic.response import raw, text
 from spotipy import MemoryCacheHandler, SpotifyClientCredentials
 from spotipy.client import Spotify
@@ -47,6 +48,7 @@ from yc_logging import NO_COLOR, setup_logging
 from yc_magic import run_function_in_thread_from_async_function
 from yc_spotify import SpotifyURLProcessor
 from yc_utils import cap_width_and_height, get_audio_name, get_video_name, is_save
+from yc_utils import get_hq_audio_name
 
 VERSION = "0.0.0-poc.1.0.2"
 API_VERSION = "0.0.0-poc.1.0.0"  # https://commandcracker.github.io/YouCube/
@@ -130,6 +132,19 @@ Audio u. Video preview / thumbnail:
 
 logger = setup_logging()
 # TODO: change sanic logging format
+
+
+def external_base_url(request: Request) -> str:
+    """Returns the public HTTP base URL for this request."""
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    scheme = forwarded_proto or ("https" if request.scheme == "wss" else request.scheme)
+    if scheme == "ws":
+        scheme = "http"
+    elif scheme == "wss":
+        scheme = "https"
+
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    return f"{scheme}://{host}"
 
 
 async def get_vid(vid_file: str, tracker: int) -> List[str]:
@@ -217,8 +232,12 @@ class Actions:
             loop,
             message.get("width"),
             message.get("height"),
+            bool(message.get("hq_audio")),
             spotify_url_processor,
         )
+        if message.get("hq_audio") and out.get("action") == "media":
+            out["audio_format"] = "mp3"
+            out["audio_url"] = f"{external_base_url(request)}/mp3/{out.get('id')}"
         for file in files:
             request.app.shared_ctx.data[file] = datetime.now()
         return out
@@ -287,7 +306,10 @@ class Actions:
             "action": "handshake",
             "server": {"version": VERSION},
             "api": {"version": API_VERSION},
-            "capabilities": {"video": ["32vid"], "audio": ["dfpwm"]},
+            "capabilities": {
+                "video": ["32vid", "ccdirectgpu"],
+                "audio": ["dfpwm", "mp3", "cchq-speakers"],
+            },
         }
 
     # pylint: enable=missing-function-docstring
@@ -383,6 +405,17 @@ async def main_start(app: Sanic):
 async def stream_dfpwm(_request: Request, media_id: str, chunkindex: int):
     """WIP HTTP mode"""
     return raw(await getchunk(join(DATA_FOLDER, get_audio_name(media_id)), chunkindex))
+
+
+@app.route("/mp3/<media_id:str>")
+async def stream_mp3(_request: Request, media_id: str):
+    """Streams MP3 audio for CC:HQ Speakers."""
+    if not is_save(media_id):
+        return text("Invalid media id", status=400)
+    return await file_response(
+        join(DATA_FOLDER, get_hq_audio_name(media_id)),
+        mime_type="audio/mpeg",
+    )
 
 
 @app.route("/32vid/<media_id:str>/<width:int>/<height:int>/<tracker:int>")  # , stream=True

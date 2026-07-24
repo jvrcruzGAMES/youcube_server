@@ -20,8 +20,10 @@ from yc_utils import (
     cap_width_and_height,
     create_data_folder_if_not_present,
     get_audio_name,
+    get_hq_audio_name,
     get_video_name,
     is_audio_already_downloaded,
+    is_hq_audio_already_downloaded,
     is_video_already_downloaded,
     remove_ansi_escape_codes,
     remove_whitespace,
@@ -141,12 +143,53 @@ def download_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
         )
 
 
+def download_hq_audio(temp_dir: str, media_id: str, resp: Websocket, loop):
+    """
+    Converts the downloaded audio to MP3 for CC:HQ Speakers.
+    """
+    run_coroutine_threadsafe(
+        resp.send(dumps({"action": "status", "message": "Converting audio to mp3 ..."})),
+        loop,
+    )
+
+    if NO_COLOR:
+        prefix = "[FFmpeg]"
+    else:
+        prefix = f"{Foreground.BRIGHT_GREEN}[FFmpeg]{RESET} "
+
+    def handler(line):
+        logger.debug("%s%s", prefix, line)
+
+    returncode = run_with_live_output(
+        [
+            FFMPEG_PATH,
+            "-i",
+            join(temp_dir, listdir(temp_dir)[0]),
+            "-vn",
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            getenv("HQ_AUDIO_BITRATE", "192k"),
+            join(DATA_FOLDER, get_hq_audio_name(media_id)),
+        ],
+        handler,
+    )
+
+    if returncode != 0:
+        logger.warning("FFmpeg exited with %s", returncode)
+        run_coroutine_threadsafe(
+            resp.send(dumps({"action": "error", "message": "Faild to convert hq audio!"})),
+            loop,
+        )
+
+
 def download(
     url: str,
     resp: Websocket,
     loop,
     width: int,
     height: int,
+    hq_audio: bool,
     spotify_url_processor: SpotifyURLProcessor,
 ) -> (dict[str, any], list):
     """
@@ -248,9 +291,14 @@ def download(
         create_data_folder_if_not_present()
 
         audio_downloaded = is_audio_already_downloaded(media_id)
+        hq_audio_downloaded = is_hq_audio_already_downloaded(media_id)
         video_downloaded = is_video_already_downloaded(media_id, width, height)
 
-        if not audio_downloaded or (not video_downloaded and is_video):
+        if (
+            not audio_downloaded
+            or (hq_audio and not hq_audio_downloaded)
+            or (not video_downloaded and is_video)
+        ):
             run_coroutine_threadsafe(
                 resp.send(
                     dumps({"action": "status", "message": "Downloading resource ..."})
@@ -264,6 +312,9 @@ def download(
 
         if not audio_downloaded:
             download_audio(temp_dir, media_id, resp, loop)
+
+        if hq_audio and not hq_audio_downloaded:
+            download_hq_audio(temp_dir, media_id, resp, loop)
 
         if not video_downloaded and is_video:
             download_video(temp_dir, media_id, resp, loop, width, height)
@@ -289,6 +340,8 @@ def download(
 
     files = []
     files.append(get_audio_name(media_id))
+    if hq_audio:
+        files.append(get_hq_audio_name(media_id))
     if is_video:
         files.append(get_video_name(media_id, width, height))
 
