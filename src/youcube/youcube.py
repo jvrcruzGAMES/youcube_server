@@ -463,6 +463,9 @@ async def get_line_offsets(file_path: str) -> List[int]:
     return offsets
 
 
+HLS_VIDEO_FRAMES_PER_SEGMENT = 10
+HLS_AUDIO_CHUNKS_PER_SEGMENT = 10
+
 @app.route("/hls/request")
 async def hls_request(request: Request):
     import math
@@ -480,7 +483,8 @@ async def hls_request(request: Request):
     except ValueError:
         return json_response({"error": "Invalid width or height"}, status=400)
 
-    width, height = cap_width_and_height(width, height)
+    # Use larger caps for HLS mode (up to 1920x1080)
+    width, height = cap_width_and_height(width, height, max_width=1920, max_height=1080)
 
     loop = get_running_loop()
     
@@ -512,7 +516,7 @@ async def hls_request(request: Request):
     
     try:
         offsets = await get_line_offsets(video_file)
-        video_segments_count = len(offsets)
+        video_segments_count = math.ceil(len(offsets) / HLS_VIDEO_FRAMES_PER_SEGMENT)
     except Exception:
         video_segments_count = 0
 
@@ -520,7 +524,7 @@ async def hls_request(request: Request):
     audio_file = join(DATA_FOLDER, audio_file_name)
     try:
         audio_size = getsize(audio_file)
-        audio_segments_count = math.ceil(audio_size / CHUNKS_AT_ONCE)
+        audio_segments_count = math.ceil(audio_size / (HLS_AUDIO_CHUNKS_PER_SEGMENT * CHUNKS_AT_ONCE))
     except Exception:
         audio_segments_count = 0
 
@@ -545,15 +549,16 @@ async def hls_audio(request: Request, media_id: str, segment_index: int):
     if not is_save(media_id) or not exists(file):
         return text("", status=404)
         
+    segment_size = HLS_AUDIO_CHUNKS_PER_SEGMENT * CHUNKS_AT_ONCE
     async with await open_async(file=file, mode="rb") as f:
-        await f.seek(segment_index * CHUNKS_AT_ONCE)
-        chunk = await f.read(CHUNKS_AT_ONCE)
+        await f.seek(segment_index * segment_size)
+        chunk = await f.read(segment_size)
         return raw(chunk, content_type="application/octet-stream")
 
 
 @app.route("/hls/video/<media_id:str>/<width:int>x<height:int>/<segment_index:int>")
 async def hls_video(request: Request, media_id: str, width: int, height: int, segment_index: int):
-    width, height = cap_width_and_height(width, height)
+    width, height = cap_width_and_height(width, height, max_width=1920, max_height=1080)
     file_name = get_video_name(media_id, width, height)
     file = join(DATA_FOLDER, file_name)
     
@@ -562,18 +567,24 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
         
     try:
         offsets = await get_line_offsets(file)
-        if segment_index < 0 or segment_index >= len(offsets):
+        start_frame = segment_index * HLS_VIDEO_FRAMES_PER_SEGMENT
+        if start_frame < 0 or start_frame >= len(offsets):
             return text("", status=404)
             
-        offset = offsets[segment_index]
+        offset = offsets[start_frame]
         async with await open_async(file=file, mode="rb") as f:
             await f.seek(offset)
-            line = await f.readline()
-            if line.endswith(b"\r\n"):
-                line = line[:-2]
-            elif line.endswith(b"\n"):
-                line = line[:-1]
-            return text(line.decode("utf-8", errors="ignore"))
+            lines = []
+            for _ in range(HLS_VIDEO_FRAMES_PER_SEGMENT):
+                line = await f.readline()
+                if not line:
+                    break
+                if line.endswith(b"\r\n"):
+                    line = line[:-2]
+                elif line.endswith(b"\n"):
+                    line = line[:-1]
+                lines.append(line.decode("utf-8", errors="ignore"))
+            return text("\n".join(lines))
     except Exception as e:
         logger.error("HLS Video error: %s", e)
         return text("", status=500)

@@ -55,9 +55,9 @@ def cap_height(height: int) -> int:
     return min(height, 324)
 
 
-def cap_width_and_height(width: int, height: int) -> Tuple[int, int]:
+def cap_width_and_height(width: int, height: int, max_width: int = 656, max_height: int = 324) -> Tuple[int, int]:
     """Caps the width and height"""
-    return cap_width(width), cap_height(height)
+    return min(width, max_width), min(height, max_height)
 
 
 VIDEO_FORMAT = "32vid"
