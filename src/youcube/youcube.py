@@ -575,6 +575,99 @@ async def get_line_offsets(file_path: str) -> List[int]:
 HLS_VIDEO_FRAMES_PER_SEGMENT = 10
 HLS_AUDIO_CHUNKS_PER_SEGMENT = 10
 
+
+async def create_hls_video_frame_table(
+    video_file: str,
+    segment_index: int,
+    is_directgpu: bool,
+    display_width: int,
+    display_height: int,
+) -> str | None:
+    """Builds one Lua frame-table segment from the cached sanjuuni .32vid source."""
+    offsets = await get_line_offsets(video_file)
+    start_frame = segment_index * HLS_VIDEO_FRAMES_PER_SEGMENT
+    if start_frame < 0 or start_frame >= len(offsets):
+        return None
+
+    offset = offsets[start_frame]
+    frames_data = []
+    async with await open_async(file=video_file, mode="rb") as f:
+        await f.seek(offset)
+        for _ in range(HLS_VIDEO_FRAMES_PER_SEGMENT):
+            line = await f.readline()
+            if not line:
+                break
+            if line.endswith(b"\r\n"):
+                line = line[:-2]
+            elif line.endswith(b"\n"):
+                line = line[:-1]
+
+            if is_directgpu:
+                draws, palette = decode_32vid_frame_directgpu(
+                    line,
+                    display_width,
+                    display_height,
+                )
+                frames_data.append({
+                    "is_directgpu": True,
+                    "palette": palette,
+                    "draws": encode_draws_binary(draws),
+                })
+            else:
+                text_lines, fg_lines, bg_lines, palette = decode_32vid_frame(line)
+                frames_data.append({
+                    "is_directgpu": False,
+                    "palette": palette,
+                    "text": text_lines,
+                    "fg": fg_lines,
+                    "bg": bg_lines,
+                })
+
+    out = ["return {\n"]
+    for frame in frames_data:
+        out.append("  {\n")
+        out.append("    palette = {\n")
+        for r, g, b in frame["palette"]:
+            out.append(f"      {{{r/255.0:.4f}, {g/255.0:.4f}, {b/255.0:.4f}}},\n")
+        out.append("    },\n")
+
+        if frame["is_directgpu"]:
+            esc_draws = "".join(f"\\{val}" for val in frame["draws"])
+            out.append(f'    draws = "{esc_draws}",\n')
+        else:
+            out.append("    text = {\n")
+            for value in frame["text"]:
+                escaped = escape_lua_string(value)
+                out.append(f'      "{escaped}",\n')
+            out.append("    },\n")
+
+            out.append("    fg = {\n")
+            for value in frame["fg"]:
+                escaped = escape_lua_string(value)
+                out.append(f'      "{escaped}",\n')
+            out.append("    },\n")
+
+            out.append("    bg = {\n")
+            for value in frame["bg"]:
+                escaped = escape_lua_string(value)
+                out.append(f'      "{escaped}",\n')
+            out.append("    },\n")
+
+        out.append("  },\n")
+    out.append("}\n")
+
+    return "".join(out)
+
+
+def escape_lua_string(value: str) -> str:
+    return (
+        value
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+
 @app.route("/hls/request")
 async def hls_request(request: Request):
     import math
