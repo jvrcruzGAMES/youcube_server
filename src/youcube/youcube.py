@@ -37,7 +37,7 @@ from sanic.compat import open_async
 from sanic.exceptions import SanicException
 from sanic.handlers import ErrorHandler
 from sanic.response import file as file_response
-from sanic.response import raw, text, json as json_response
+from sanic.response import raw, text, json as json_response, stream as stream_response
 from spotipy import MemoryCacheHandler, SpotifyClientCredentials
 from spotipy.client import Spotify
 
@@ -613,10 +613,16 @@ async def stream_32vid_file(request: Request, id: str, width: int, height: int):
     file = join(DATA_FOLDER, file_name)
     if not is_save(id) or not exists(file):
         return text("Not found", status=404)
-    return await file_response(
-        file,
-        mime_type="text/plain",
-    )
+        
+    async def streaming_fn(response):
+        async with await open_async(file, mode="rb") as f:
+            while True:
+                chunk = await f.read(4096)
+                if not chunk:
+                    break
+                await response.write(chunk)
+                
+    return stream_response(streaming_fn, content_type="text/plain")
 # pylint: enable=redefined-outer-name
 
 
