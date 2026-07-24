@@ -292,6 +292,73 @@ class Actions:
         return out
 
     @staticmethod
+    async def ensure_video(message: dict, resp: Websocket, request: Request):
+        loop = get_running_loop()
+
+        url = message.get("url")
+        if error := assert_resp("url", url, str):
+            return error
+
+        media_id = message.get("id")
+        if error := assert_resp("id", media_id, str):
+            return error
+
+        width = message.get("width")
+        if error := assert_resp("width", width, int):
+            return error
+
+        height = message.get("height")
+        if error := assert_resp("height", height, int):
+            return error
+
+        width, height = cap_width_and_height(width, height)
+        video_file_name = get_video_name(media_id, width, height)
+        video_file = join(DATA_FOLDER, video_file_name)
+
+        if not exists(video_file):
+            await resp.send(
+                dumps(
+                    {
+                        "action": "status",
+                        "message": "Video frame source missing, converting ...",
+                    }
+                )
+            )
+            out, files = await run_function_in_thread_from_async_function(
+                download,
+                url,
+                resp,
+                loop,
+                width,
+                height,
+                bool(message.get("hq_audio")),
+                spotify_url_processor,
+            )
+            for file in files:
+                request.app.shared_ctx.data[file] = datetime.now()
+
+            if out.get("action") != "media":
+                return out
+
+        if not exists(video_file):
+            return {
+                "action": "error",
+                "message": "Failed to convert video to sanjuuni frame source",
+            }
+
+        offsets = await get_line_offsets(video_file)
+        request.app.shared_ctx.data[video_file_name] = datetime.now()
+        return {
+            "action": "video_ready",
+            "id": media_id,
+            "video_width": width,
+            "video_height": height,
+            "video_segments_count": math.ceil(
+                len(offsets) / HLS_VIDEO_FRAMES_PER_SEGMENT
+            ),
+        }
+
+    @staticmethod
     async def get_chunk(message: dict, _unused, request: Request):
         # get "chunkindex"
         chunkindex = message.get("chunkindex")
