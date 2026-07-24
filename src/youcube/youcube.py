@@ -571,15 +571,19 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
         return text("", status=404)
         
     try:
+        is_directgpu = request.args.get("is_directgpu") == "true"
+        display_width = int(request.args.get("display_width", "0"))
+        display_height = int(request.args.get("display_height", "0"))
+        
         offsets = await get_line_offsets(file)
         start_frame = segment_index * HLS_VIDEO_FRAMES_PER_SEGMENT
         if start_frame < 0 or start_frame >= len(offsets):
             return text("", status=404)
             
         offset = offsets[start_frame]
+        frames_data = []
         async with await open_async(file=file, mode="rb") as f:
             await f.seek(offset)
-            lines = []
             for _ in range(HLS_VIDEO_FRAMES_PER_SEGMENT):
                 line = await f.readline()
                 if not line:
@@ -588,10 +592,67 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
                     line = line[:-2]
                 elif line.endswith(b"\n"):
                     line = line[:-1]
-                lines.append(line.decode("utf-8", errors="ignore"))
-            return text("\n".join(lines))
+                
+                if is_directgpu:
+                    draws, palette = decode_32vid_frame_directgpu(line, display_width, display_height)
+                    draws_bin = encode_draws_binary(draws)
+                    frames_data.append({
+                        "is_directgpu": True,
+                        "palette": palette,
+                        "draws": draws_bin
+                    })
+                else:
+                    text_lines, fg_lines, bg_lines, palette = decode_32vid_frame(line)
+                    frames_data.append({
+                        "is_directgpu": False,
+                        "palette": palette,
+                        "text": text_lines,
+                        "fg": fg_lines,
+                        "bg": bg_lines
+                    })
+                    
+        # Generate Lua segment script
+        out = ["return {\\n"]
+        for frame in frames_data:
+            out.append("  {\\n")
+            
+            # Palette
+            out.append("    palette = {\\n")
+            for r, g, b in frame["palette"]:
+                out.append(f"      {{{r/255.0:.4f}, {g/255.0:.4f}, {b/255.0:.4f}}},\\n")
+            out.append("    },\\n")
+            
+            if frame["is_directgpu"]:
+                esc_draws = "".join(f"\\\\{val}" for val in frame["draws"])
+                out.append(f'    draws = "{esc_draws}",\\n')
+            else:
+                out.append("    text = {\\n")
+                for t in frame["text"]:
+                    t_esc = t.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r')
+                    out.append(f'      "{t_esc}",\\n')
+                out.append("    },\\n")
+                
+                out.append("    fg = {\\n")
+                for fg in frame["fg"]:
+                    fg_esc = fg.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r')
+                    out.append(f'      "{fg_esc}",\\n')
+                out.append("    },\\n")
+                
+                out.append("    bg = {\\n")
+                for bg in frame["bg"]:
+                    bg_esc = bg.replace('\\\\', '\\\\\\\\').replace('"', '\\\\"').replace('\\n', '\\\\n').replace('\\r', '\\\\r')
+                    out.append(f'      "{bg_esc}",\\n')
+                out.append("    },\\n")
+                
+            out.append("  },\\n")
+        out.append("}\\n")
+        
+        return text("".join(out), content_type="text/plain")
+        
     except Exception as e:
         logger.error("HLS Video error: %s", e)
+        import traceback
+        logger.error(traceback.format_exc())
         return text("", status=500)
 
 
@@ -663,3 +724,171 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+def decode_teletext_py(char_code: int):
+    if char_code < 128 or char_code > 255:
+        return [0, 0, 0, 0, 0, 0]
+    val = char_code - 128
+    return [
+        val & 0x01,
+        (val >> 1) & 0x01,
+        (val >> 2) & 0x01,
+        (val >> 3) & 0x01,
+        (val >> 4) & 0x01,
+        (val >> 6) & 0x01
+    ]
+
+def decode_32vid_frame(line: bytes):
+    if not (line.startswith(b"!CPC") or line.startswith(b"!CPD")):
+        raise ValueError("Invalid format")
+    
+    if line.startswith(b"!CPC"):
+        length = int(line[4:8], 16)
+        b64data = line[8:length + 8]
+    else:
+        length = int(line[4:16], 16)
+        b64data = line[16:length + 16]
+        
+    import base64
+    data = base64.b64decode(b64data)
+    
+    import struct
+    width, height = struct.unpack("<HH", data[4:8])
+    
+    pos = 16
+    c_char = data[pos:pos+1].decode('latin-1')
+    n_count = data[pos+1]
+    pos += 2
+    
+    text_lines = []
+    current_line = []
+    line_len = 0
+    y_idx = 1
+    
+    while y_idx <= height:
+        run_len = min(n_count, width - line_len)
+        current_line.append(c_char * run_len)
+        line_len += run_len
+        n_count -= run_len
+        
+        if line_len == width:
+            text_lines.append("".join(current_line))
+            y_idx += 1
+            current_line = []
+            line_len = 0
+            
+        if n_count == 0 and pos < len(data):
+            c_char = data[pos:pos+1].decode('latin-1')
+            n_count = data[pos+1]
+            pos += 2
+            
+    color_pos = pos
+    color_val = data[color_pos]
+    color_count = data[color_pos+1]
+    color_pos += 2
+    
+    fg_lines = []
+    bg_lines = []
+    current_fg = []
+    current_bg = []
+    line_len = 0
+    y_idx = 1
+    
+    hex_lookup = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    
+    while y_idx <= height:
+        run_len = min(color_count, width - line_len)
+        fg_nibble = hex_lookup[color_val & 0x0F]
+        bg_nibble = hex_lookup[color_val >> 4]
+        
+        current_fg.append(fg_nibble * run_len)
+        current_bg.append(bg_nibble * run_len)
+        
+        line_len += run_len
+        color_count -= run_len
+        
+        if line_len == width:
+            fg_lines.append("".join(current_fg))
+            bg_lines.append("".join(current_bg))
+            y_idx += 1
+            current_fg = []
+            current_bg = []
+            line_len = 0
+            
+        if color_count == 0 and color_pos < len(data):
+            color_val = data[color_pos]
+            color_count = data[color_pos+1]
+            color_pos += 2
+            
+    palette_start = len(data) - 48
+    palette_bytes = data[palette_start:]
+    palette = []
+    for i in range(16):
+        r = palette_bytes[i*3]
+        g = palette_bytes[i*3 + 1]
+        b = palette_bytes[i*3 + 2]
+        palette.append((r, g, b))
+        
+    return text_lines, fg_lines, bg_lines, palette
+
+def decode_32vid_frame_directgpu(line: bytes, display_width: int, display_height: int):
+    text_lines, fg_lines, bg_lines, palette = decode_32vid_frame(line)
+    
+    width = len(text_lines[0])
+    height = len(text_lines)
+    
+    ratio_x = display_width / (width * 2)
+    ratio_y = display_height / (height * 3)
+    
+    draws = []
+    
+    for y in range(height):
+        line_chars = text_lines[y]
+        fg_line = fg_lines[y]
+        bg_line = bg_lines[y]
+        
+        ry1 = y * 3
+        ty0 = int(ry1 * ratio_y)
+        ty1 = int((ry1 + 1) * ratio_y)
+        ty2 = int((ry1 + 2) * ratio_y)
+        ty3 = int((ry1 + 3) * ratio_y)
+        
+        for x in range(width):
+            char_code = ord(line_chars[x]) if x < len(line_chars) else 32
+            fg_color = palette[int(fg_line[x], 16)]
+            bg_color = palette[int(bg_line[x], 16)]
+            
+            rx1 = x * 2
+            tx0 = int(rx1 * ratio_x)
+            tx1 = int((rx1 + 1) * ratio_x)
+            tx2 = int((rx1 + 2) * ratio_x)
+            
+            if char_code == 32:
+                draws.append((tx0 + 1, ty0 + 1, tx2 - tx0, ty3 - ty0, bg_color[0], bg_color[1], bg_color[2]))
+            elif char_code == 219:
+                draws.append((tx0 + 1, ty0 + 1, tx2 - tx0, ty3 - ty0, fg_color[0], fg_color[1], fg_color[2]))
+            else:
+                subpixels = decode_teletext_py(char_code)
+                draws.append((tx0 + 1, ty0 + 1, tx2 - tx0, ty3 - ty0, bg_color[0], bg_color[1], bg_color[2]))
+                
+                if subpixels[0] == 1:
+                    draws.append((tx0 + 1, ty0 + 1, tx1 - tx0, ty1 - ty0, fg_color[0], fg_color[1], fg_color[2]))
+                if subpixels[1] == 1:
+                    draws.append((tx1 + 1, ty0 + 1, tx2 - tx1, ty1 - ty0, fg_color[0], fg_color[1], fg_color[2]))
+                if subpixels[2] == 1:
+                    draws.append((tx0 + 1, ty1 + 1, tx1 - tx0, ty2 - ty1, fg_color[0], fg_color[1], fg_color[2]))
+                if subpixels[3] == 1:
+                    draws.append((tx1 + 1, ty1 + 1, tx2 - tx1, ty2 - ty1, fg_color[0], fg_color[1], fg_color[2]))
+                if subpixels[4] == 1:
+                    draws.append((tx0 + 1, ty2 + 1, tx1 - tx0, ty3 - ty2, fg_color[0], fg_color[1], fg_color[2]))
+                if subpixels[5] == 1:
+                    draws.append((tx1 + 1, ty2 + 1, tx2 - tx1, ty3 - ty2, fg_color[0], fg_color[1], fg_color[2]))
+                    
+    return draws, palette
+
+def encode_draws_binary(draws: list) -> bytes:
+    import struct
+    out = []
+    for x, y, w, h, r, g, b in draws:
+        out.append(struct.pack(">HHHHBBB", x, y, w, h, r, g, b))
+    return b"".join(out)
