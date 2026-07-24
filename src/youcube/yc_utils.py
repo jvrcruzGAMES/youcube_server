@@ -47,12 +47,12 @@ def remove_ansi_escape_codes(text: str) -> str:
 
 def cap_width(width: int) -> int:
     """Caps the width"""
-    return min(width, 328)
+    return min(width, 656)
 
 
 def cap_height(height: int) -> int:
     """Caps the height"""
-    return min(height, 243)
+    return min(height, 324)
 
 
 def cap_width_and_height(width: int, height: int) -> Tuple[int, int]:
