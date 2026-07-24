@@ -346,6 +346,30 @@ class Actions:
                 "message": "Failed to convert video to sanjuuni frame source",
             }
 
+        is_directgpu = bool(message.get("is_directgpu"))
+        display_width = int(message.get("display_width") or 0)
+        display_height = int(message.get("display_height") or 0)
+        try:
+            frame_table = await create_hls_video_frame_table(
+                video_file,
+                0,
+                is_directgpu,
+                display_width,
+                display_height,
+            )
+        except Exception as exc:
+            logger.error("Failed to create first HLS frame table: %s", exc)
+            return {
+                "action": "error",
+                "message": f"Failed to create HLS sanjuuni frame table: {exc}",
+            }
+
+        if frame_table is None:
+            return {
+                "action": "error",
+                "message": "Failed to create HLS sanjuuni frame table: empty video source",
+            }
+
         offsets = await get_line_offsets(video_file)
         request.app.shared_ctx.data[video_file_name] = datetime.now()
         return {
