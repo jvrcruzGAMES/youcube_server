@@ -223,7 +223,7 @@ def download(
     # FIXME: Cleanup on Exception
     with TemporaryDirectory(prefix="youcube-") as temp_dir:
         yt_dl_options = {
-            "format": "worst[ext=mp4]/worst" if is_video else "worstaudio/worst",
+            "format": "wv+wa" if is_video else "wa",
             "outtmpl": join(temp_dir, "%(id)s.%(ext)s"),
             "default_search": "auto",
             "restrictfilenames": True,
