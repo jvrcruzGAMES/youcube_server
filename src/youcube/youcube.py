@@ -6,7 +6,7 @@ YouCube Server
 """
 
 # built-in modules
-from asyncio import get_event_loop
+from asyncio import get_running_loop
 from base64 import b64encode
 from datetime import datetime
 from multiprocessing import Manager
@@ -219,7 +219,7 @@ class Actions:
 
     @staticmethod
     async def request_media(message: dict, resp: Websocket, request: Request):
-        loop = get_event_loop()
+        loop = get_running_loop()
         # get "url"
         url = message.get("url")
         if error := assert_resp("url", url, str):

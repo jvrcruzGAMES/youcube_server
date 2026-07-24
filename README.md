@@ -1,6 +1,6 @@
 # YouCube Server
 
-[![Python Version: 3.7+]](https://www.python.org/downloads/)
+[![Python Version: 3.10+]](https://www.python.org/downloads/)
 [![Python Lint Workflow Status]](https://github.com/CC-YouCube/server/actions/workflows/pylint.yml)
 
 ![preview]
@@ -13,7 +13,7 @@ Moor Information about the servers can be seen on the [doc].
 
 - [yt-dlp/FFmpeg] / [FFmpeg 5.1+]
 - [sanjuuni]
-- [Python 3.7+]
+- [Python 3.10+]
   - [sanic]
   - [yt-dlp]
   - [ujson] (Optional)
@@ -71,13 +71,13 @@ services:
 [yt-dlp/FFmpeg]: https://github.com/yt-dlp/FFmpeg-Builds
 [FFmpeg 5.1+]: https://ffmpeg.org
 [sanjuuni]: https://github.com/MCJack123/sanjuuni
-[Python 3.7+]: https://www.python.org/downloads
+[Python 3.10+]: https://www.python.org/downloads
 [sanic]: https://sanic.dev
 [yt-dlp]: https://pypi.org/project/yt-dlp
 [ujson]: https://pypi.org/project/ujson
 [spotipy]: https://pypi.org/project/spotipy
 [doc]: https://youcube.madefor.cc/api
 [preview]: .README/preview-server.png
-[Python Version: 3.7+]: https://img.shields.io/badge/Python-3.7+-green?style=for-the-badge&logo=Python&logoColor=white
+[Python Version: 3.10+]: https://img.shields.io/badge/Python-3.10+-green?style=for-the-badge&logo=Python&logoColor=white
 [Python Lint Workflow Status]: https://img.shields.io/github/actions/workflow/status/CC-YouCube/server/pylint.yml?branch=main&label=Python%20Lint&logo=github&style=for-the-badge
 [Sanic Builtin values]: https://sanic.dev/en/guide/running/configuration.md#builtin-values
