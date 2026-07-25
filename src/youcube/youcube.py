@@ -585,11 +585,11 @@ async def get_line_offsets(file_path: str) -> List[int]:
     async with await open_async(file_path, mode="rb") as f:
         offset = 0
         while True:
-            offsets.append(offset)
             line = await f.readline()
             if not line:
-                offsets.pop() # Remove the offset of EOF
                 break
+            if line.startswith(b"!CPC") or line.startswith(b"!CPD"):
+                offsets.append(offset)
             offset += len(line)
             
     line_offsets_cache[file_path] = offsets
@@ -617,7 +617,7 @@ async def create_hls_video_frame_table(
     frames_data = []
     async with await open_async(file=video_file, mode="rb") as f:
         await f.seek(offset)
-        for _ in range(HLS_VIDEO_FRAMES_PER_SEGMENT):
+        while len(frames_data) < HLS_VIDEO_FRAMES_PER_SEGMENT:
             line = await f.readline()
             if not line:
                 break
@@ -625,6 +625,8 @@ async def create_hls_video_frame_table(
                 line = line[:-2]
             elif line.endswith(b"\n"):
                 line = line[:-1]
+            if not (line.startswith(b"!CPC") or line.startswith(b"!CPD")):
+                continue
 
             if is_directgpu:
                 draws, palette = decode_32vid_frame_directgpu(
