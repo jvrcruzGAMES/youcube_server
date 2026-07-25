@@ -606,8 +606,8 @@ async def create_hls_video_frame_table(
     is_directgpu: bool,
     display_width: int,
     display_height: int,
-) -> str | None:
-    """Builds one Lua frame-table segment from the cached sanjuuni .32vid source."""
+) -> list[str] | None:
+    """Builds one JSON frame-code segment from the cached sanjuuni .32vid source."""
     offsets = await get_line_offsets(video_file)
     start_frame = segment_index * HLS_VIDEO_FRAMES_PER_SEGMENT
     if start_frame < 0 or start_frame >= len(offsets):
@@ -647,40 +647,40 @@ async def create_hls_video_frame_table(
                     "bg": bg_lines,
                 })
 
-    out = ["return {\n"]
+    frame_codes = []
     for frame in frames_data:
-        out.append("  {\n")
-        out.append("    palette = {\n")
+        out = ["return {\n"]
+        out.append("  palette = {\n")
         for r, g, b in frame["palette"]:
-            out.append(f"      {{{r/255.0:.4f}, {g/255.0:.4f}, {b/255.0:.4f}}},\n")
-        out.append("    },\n")
+            out.append(f"    {{{r/255.0:.4f}, {g/255.0:.4f}, {b/255.0:.4f}}},\n")
+        out.append("  },\n")
 
         if frame["is_directgpu"]:
             esc_draws = "".join(f"\\{val}" for val in frame["draws"])
-            out.append(f'    draws = "{esc_draws}",\n')
+            out.append(f'  draws = "{esc_draws}",\n')
         else:
-            out.append("    text = {\n")
+            out.append("  text = {\n")
             for value in frame["text"]:
                 escaped = escape_lua_string(value)
-                out.append(f'      "{escaped}",\n')
-            out.append("    },\n")
+                out.append(f'    "{escaped}",\n')
+            out.append("  },\n")
 
-            out.append("    fg = {\n")
+            out.append("  fg = {\n")
             for value in frame["fg"]:
                 escaped = escape_lua_string(value)
-                out.append(f'      "{escaped}",\n')
-            out.append("    },\n")
+                out.append(f'    "{escaped}",\n')
+            out.append("  },\n")
 
-            out.append("    bg = {\n")
+            out.append("  bg = {\n")
             for value in frame["bg"]:
                 escaped = escape_lua_string(value)
-                out.append(f'      "{escaped}",\n')
-            out.append("    },\n")
+                out.append(f'    "{escaped}",\n')
+            out.append("  },\n")
 
-        out.append("  },\n")
-    out.append("}\n")
+        out.append("}\n")
+        frame_codes.append("".join(out))
 
-    return "".join(out)
+    return frame_codes
 
 
 def escape_lua_string(value: str) -> str:
@@ -813,7 +813,7 @@ async def hls_video(request: Request, media_id: str, width: int, height: int, se
         if frame_table is None:
             return text("", status=404)
 
-        return text(frame_table, content_type="text/plain")
+        return json_response(frame_table)
         
     except Exception as e:
         logger.error("HLS Video error: %s", e)
